@@ -59,6 +59,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
         _LOGGER.error("Unable to login to the VeSync server")
         return False
 
+    forward_setup = hass.config_entries.async_forward_entry_setup
+
     hass.data[DOMAIN] = {config_entry.entry_id: {}}
     hass.data[DOMAIN][config_entry.entry_id][VS_MANAGER] = manager
 
@@ -86,20 +88,18 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     device_dict = await async_process_devices(hass, manager)
 
-    for _, vs_p in PLATFORMS.items():
+    for p, vs_p in PLATFORMS.items():
         hass.data[DOMAIN][config_entry.entry_id][vs_p] = []
         if device_dict[vs_p]:
             hass.data[DOMAIN][config_entry.entry_id][vs_p].extend(device_dict[vs_p])
-
-    await hass.config_entries.async_forward_entry_setups(config_entry, list(PLATFORMS.keys()))
+            hass.async_create_task(forward_setup(config_entry, p))
 
     async def async_new_device_discovery(service: ServiceCall) -> None:
         """Discover if new devices should be added."""
         manager = hass.data[DOMAIN][config_entry.entry_id][VS_MANAGER]
         dev_dict = await async_process_devices(hass, manager)
-        platforms_to_setup = []
 
-        async def _add_new_devices(platform: str) -> None:
+        def _add_new_devices(platform: str) -> None:
             """Add new devices to hass."""
             old_devices = hass.data[DOMAIN][config_entry.entry_id][PLATFORMS[platform]]
             if new_devices := list(
@@ -111,13 +111,10 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
                         hass, VS_DISCOVERY.format(PLATFORMS[platform]), new_devices
                     )
                 else:
-                    platforms_to_setup.append(platform)
+                    hass.async_create_task(forward_setup(config_entry, platform))
 
         for k in PLATFORMS:
             _add_new_devices(k)
-
-        if platforms_to_setup:
-            await hass.config_entries.async_forward_entry_setups(config_entry, platforms_to_setup)
 
     hass.services.async_register(
         DOMAIN, SERVICE_UPDATE_DEVS, async_new_device_discovery
